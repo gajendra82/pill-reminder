@@ -40,6 +40,9 @@ class BlynkScheduleMapper
     /**
      * @var array<int, array{hour: string, minute: string}>
      */
+    /**
+     * Verified in sketch_oct21a.ino. This does not prove the physical device is running that sketch.
+     */
     public const SLOT_PINS = [
         1 => ['hour' => 'V1', 'minute' => 'V2'],
         2 => ['hour' => 'V3', 'minute' => 'V4'],
@@ -59,6 +62,28 @@ class BlynkScheduleMapper
      * @param  list<array{slot: int, medicine_id: int, schedule_id: int}>  $assignments
      * @return array<string, mixed>
      */
+    /**
+     * @param  array<string, mixed>  $schedule
+     * @return array{time: array{hour: int, minute: int}|null, unsupported: list<array<string, mixed>>, assumptions: list<array<string, mixed>>, laravel_only: list<array<string, mixed>>}
+     */
+    public function inspectDailySchedule(int|string $medicineId, array $schedule): array
+    {
+        $evaluation = $this->evaluateSchedule($medicineId, $schedule);
+        $parsed = $this->parseTime($schedule['scheduled_time'] ?? null);
+        $time = null;
+
+        if ($parsed !== null && $parsed['hour'] <= 23 && $parsed['minute'] <= 59 && $parsed['seconds'] === 0) {
+            $time = ['hour' => $parsed['hour'], 'minute' => $parsed['minute']];
+        }
+
+        return [
+            'time' => $time,
+            'unsupported' => $evaluation['unsupported'],
+            'assumptions' => $evaluation['assumptions'],
+            'laravel_only' => $evaluation['laravel_only'],
+        ];
+    }
+
     public function propose(array $medicines, bool $persistenceAvailable, array $assignments = []): array
     {
         if (! $persistenceAvailable) {
@@ -512,7 +537,7 @@ class BlynkScheduleMapper
             ];
         };
 
-        if ($this->present($schedule, 'days_of_week')) {
+        if ($this->present($schedule, 'days_of_week') && ! $this->coversEveryIsoWeekday($schedule['days_of_week'])) {
             $addUnsupported(
                 'days_of_week',
                 $schedule['days_of_week'],
@@ -601,11 +626,40 @@ class BlynkScheduleMapper
         ];
     }
 
+    /**
+     * Null stays the stored form of “every day”. The complete ISO set is the same
+     * daily schedule for the device and is not rewritten in the database.
+     */
+    private function coversEveryIsoWeekday(mixed $days): bool
+    {
+        if (! is_array($days)) {
+            return false;
+        }
+
+        $selected = [];
+
+        foreach ($days as $day) {
+            if (is_int($day) || (is_string($day) && preg_match('/^[1-7]$/', $day) === 1)) {
+                $selected[(int) $day] = true;
+
+                continue;
+            }
+
+            return false;
+        }
+
+        $week = array_keys($selected);
+        sort($week);
+
+        return $week === [1, 2, 3, 4, 5, 6, 7];
+    }
+
+    /**
+     * Schedule calendar dates are Asia/Kolkata dates. The application timezone stays UTC.
+     */
     private function timezone(): string
     {
-        $timezone = config('app.timezone');
-
-        return is_string($timezone) && $timezone !== '' ? $timezone : 'UTC';
+        return DoseOccurrenceCalculator::TIMEZONE;
     }
 
     private function dateString(mixed $value): ?string

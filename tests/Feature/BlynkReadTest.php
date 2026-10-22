@@ -106,6 +106,39 @@ class BlynkReadTest extends TestCase
         $this->assertClientExposesOnlyRead();
     }
 
+    public function test_status_returns_dashboard_pin_numbers_without_writing(): void
+    {
+        $this->actingAsApiUser();
+        $this->configureBlynk();
+        Http::preventStrayRequests();
+        Http::fake([
+            self::FAKE_BASE.'/external/api/getAll*' => Http::response([
+                'v1' => 12,
+                'v2' => 25,
+                'v3' => 16,
+                'v4' => 26,
+                'v5' => 16,
+                'v6' => 50,
+                'v7' => 1,
+                'v8' => 2,
+                'v9' => 3,
+            ], 200),
+        ]);
+
+        $response = $this->getJson('/api/device/status');
+
+        $response->assertOk()
+            ->assertJsonPath('datastreams.v1', 12)
+            ->assertJsonPath('datastreams.v2', 25)
+            ->assertJsonPath('datastreams.v3', 16)
+            ->assertJsonPath('datastreams.v4', 26)
+            ->assertJsonPath('datastreams.v5', 16)
+            ->assertJsonPath('datastreams.v6', 50)
+            ->assertJsonPath('notice', 'Temporary single-device integration. Datastream values are uninterpreted Blynk readings and are not a medication record.');
+
+        $this->assertReadOnlyGetAll();
+    }
+
     public function test_token_echoed_by_blynk_is_removed_from_the_response(): void
     {
         $this->actingAsApiUser();
@@ -358,7 +391,7 @@ class BlynkReadTest extends TestCase
             ))
         );
 
-        $this->assertSame(['readDatastreams'], $methods);
+        $this->assertSame(['readDatastreams', 'updateDatastream'], $methods);
         $this->assertSame('/external/api/getAll', BlynkClient::READ_PATH);
     }
 

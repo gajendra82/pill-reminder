@@ -7,14 +7,34 @@ use Illuminate\Http\Client\Factory;
 use JsonException;
 
 /**
- * Read-only client for the official Blynk Device HTTPS API.
+ * Blynk Device HTTPS API client.
  *
- * GET https://{server_address}/external/api/getAll?token={device_auth_token}
+ * Read: GET https://{server_address}/external/api/getAll?token={device_auth_token}
  * https://docs.blynk.io/en/blynk.cloud/device-https-api/get-multiple-datastream-values
+ *
+ * Write one schedule pin: GET https://{server_address}/external/api/update?token={token}&{pin}={value}
+ * https://docs.blynk.io/en/blynk.cloud/device-https-api/update-datastream-value
+ * The documented success status is HTTP 200 with no response body. Callers must read the pin back.
  */
 class BlynkClient
 {
     public const READ_PATH = '/external/api/getAll';
+
+    public const UPDATE_PATH = '/external/api/update';
+
+    /**
+     * Schedule pins only. V7–V9 are firmware status pins and are not writable here.
+     *
+     * @var array<string, int>
+     */
+    private const WRITABLE_PINS = [
+        'v1' => 23,
+        'v2' => 59,
+        'v3' => 23,
+        'v4' => 59,
+        'v5' => 23,
+        'v6' => 59,
+    ];
 
     private const CONNECT_TIMEOUT_SECONDS = 5;
 
@@ -47,6 +67,8 @@ class BlynkClient
                 ]);
         } catch (ConnectionException) {
             throw new BlynkClientException(BlynkClientException::CONNECTION_FAILED);
+        } catch (\Throwable) {
+            throw new BlynkClientException(BlynkClientException::UNAVAILABLE);
         }
 
         $status = $response->status();
@@ -76,6 +98,62 @@ class BlynkClient
         return $this->normalize($decoded, $token);
     }
 
+    /**
+     * Send one integer to one schedule pin. Does not retry.
+     *
+     * @return array{accepted: bool, error_code: string|null}
+     */
+    public function updateDatastream(string $pin, int $value): array
+    {
+        $pin = strtolower($pin);
+
+        if (! array_key_exists($pin, self::WRITABLE_PINS)) {
+            return ['accepted' => false, 'error_code' => 'pin_not_allowed'];
+        }
+
+        if ($value < 0 || $value > self::WRITABLE_PINS[$pin]) {
+            return ['accepted' => false, 'error_code' => 'value_out_of_range'];
+        }
+
+        $token = $this->configuredToken();
+        $url = $this->endpoint($this->configuredBaseUrl(), self::UPDATE_PATH);
+
+        if ($token === null || $url === null) {
+            return ['accepted' => false, 'error_code' => BlynkClientException::NOT_CONFIGURED];
+        }
+
+        try {
+            $response = $this->http
+                ->connectTimeout(self::CONNECT_TIMEOUT_SECONDS)
+                ->timeout(self::TIMEOUT_SECONDS)
+                ->withoutRedirecting()
+                ->get($url, [
+                    'token' => $token,
+                    $pin => $value,
+                ]);
+        } catch (ConnectionException) {
+            return ['accepted' => false, 'error_code' => BlynkClientException::CONNECTION_FAILED];
+        } catch (\Throwable) {
+            return ['accepted' => false, 'error_code' => BlynkClientException::UNAVAILABLE];
+        }
+
+        $status = $response->status();
+
+        if ($status === 429) {
+            return ['accepted' => false, 'error_code' => BlynkClientException::RATE_LIMITED];
+        }
+
+        if (in_array($status, [400, 401, 403], true)) {
+            return ['accepted' => false, 'error_code' => BlynkClientException::UNAUTHORIZED];
+        }
+
+        if ($status !== 200 || ! $this->writeBodyAccepted($response->body())) {
+            return ['accepted' => false, 'error_code' => BlynkClientException::UNAVAILABLE];
+        }
+
+        return ['accepted' => true, 'error_code' => null];
+    }
+
     private function configuredBaseUrl(): string
     {
         $baseUrl = config('services.blynk.base_url');
@@ -102,6 +180,11 @@ class BlynkClient
 
     private function readUrl(string $baseUrl): ?string
     {
+        return $this->endpoint($baseUrl, self::READ_PATH);
+    }
+
+    private function endpoint(string $baseUrl, string $path): ?string
+    {
         if ($baseUrl === '') {
             return null;
         }
@@ -112,7 +195,7 @@ class BlynkClient
             return null;
         }
 
-        $path = $parts['path'] ?? '';
+        $basePath = $parts['path'] ?? '';
 
         if (($parts['scheme'] ?? null) !== 'https'
             || ! isset($parts['host'])
@@ -121,13 +204,28 @@ class BlynkClient
             || isset($parts['pass'])
             || isset($parts['query'])
             || isset($parts['fragment'])
-            || ($path !== '' && $path !== '/')) {
+            || ($basePath !== '' && $basePath !== '/')) {
             return null;
         }
 
         $port = isset($parts['port']) ? ':'.$parts['port'] : '';
 
-        return 'https://'.$parts['host'].$port.self::READ_PATH;
+        return 'https://'.$parts['host'].$port.$path;
+    }
+
+    private function writeBodyAccepted(string $body): bool
+    {
+        if (trim($body) === '') {
+            return true;
+        }
+
+        try {
+            $decoded = json_decode($body, true, 512, JSON_THROW_ON_ERROR);
+        } catch (JsonException) {
+            return false;
+        }
+
+        return is_array($decoded) && ! array_is_list($decoded) && ! array_key_exists('error', $decoded);
     }
 
     /**

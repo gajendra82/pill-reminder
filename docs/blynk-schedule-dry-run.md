@@ -26,14 +26,15 @@ These fields do not change the clock time, so they are not written to V1–V6:
 |---|---|
 | Medicine name, dosage, instructions | Shown on the slot only. Not a timing rule. |
 | `grace_period_minutes`, including the API default of 60 | Listed in `laravel_only_rules` with `applied_by_firmware: false`. Laravel can use it later. The device will not. |
-| `starts_on` on or before the evaluation date | Accepted only as the assumption `start_date_daily_reminder`. The medicine must be active. The evaluation date uses `app.timezone` (UTC). The DS1307 local date is not verified. |
+| `starts_on` on or before the evaluation date | Accepted only as the assumption `start_date_daily_reminder`. The medicine must be active. The evaluation date is the current Asia/Kolkata calendar date, not the UTC date. The DS1307 local date is not verified. |
 | No `starts_on` and no `ends_on` | A daily time with no date window. |
+| `days_of_week` null, or exactly ISO weekdays 1 through 7 | Treated as every day. A stored `[1,2,3,4,5,6,7]` is not rewritten to null. |
 
 These fields change when a dose is due. They are not ignored:
 
 | Field | Result |
 |---|---|
-| `days_of_week` | `unsupported_rules`. The device would ring every day. |
+| `days_of_week` other than null or the complete ISO week | `unsupported_rules`. The device would ring every day. |
 | `ends_on` | `unsupported_rules`. The device would keep ringing after the end date. |
 | `starts_on` after the evaluation date | `unsupported_rules`. The device would ring before the medicine should start. |
 | More than one active schedule on one medicine | `unsupported_multiple_schedules_for_medicine`. No schedule is chosen for that medicine. |
@@ -86,7 +87,7 @@ The client cannot send `user_id`. A medicine with more than one active schedule 
 | `no_free_slot` | assignment API | All three slots are occupied. |
 | `invalid_schedule_time` | `validation_errors` | The stored schedule time is not `HH:MM` or `HH:MM:SS` within 0–23 and 0–59. The slot stays held and its pins stay null. |
 | `duplicate_scheduled_time` | `validation_errors` | Two proposed slots have the same clock time. |
-| `days_of_week`, future `starts_on`, `ends_on`, `seconds` | `unsupported_rules` | The firmware would not match this schedule. |
+| a weekday list that is not all of ISO 1–7, a future `starts_on`, `ends_on`, `seconds` | `unsupported_rules` | The firmware would not match this schedule. `starts_on` is compared with the Asia/Kolkata date. |
 | `grace_period_minutes` | `laravel_only_rules` | Not sent to the device. |
 
 ## Example

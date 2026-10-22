@@ -405,7 +405,7 @@ class BlynkScheduleDryRunTest extends TestCase
             ->assertJsonPath('can_apply', true)
             ->assertJsonPath('writes_performed', false)
             ->assertJsonPath('evaluation.date', '2026-10-22')
-            ->assertJsonPath('evaluation.timezone', 'UTC')
+            ->assertJsonPath('evaluation.timezone', 'Asia/Kolkata')
             ->assertJsonPath('evaluation.device_timezone_verified', false)
             ->assertJsonPath('unsupported_rules', [])
             ->assertJsonPath('slots.0.schedule_id', $pastSchedule->id)
@@ -457,6 +457,61 @@ class BlynkScheduleDryRunTest extends TestCase
             ->assertJsonPath('unsupported_rules.0.schedule_id', $schedule->id)
             ->assertJsonPath('unsupported_rules.0.value', [1, 3, 5])
             ->assertJsonPath('slots.0.scheduled_time', '08:30');
+
+        Http::assertNothingSent();
+    }
+
+    public function test_all_seven_iso_weekdays_are_a_daily_schedule(): void
+    {
+        $user = $this->authenticate();
+        $medicine = $this->medicine($user, 'Every day');
+        $schedule = $this->schedule($medicine, '08:30', [
+            'days_of_week' => [1, 2, 3, 4, 5, 6, 7],
+            'starts_on' => '2026-10-22',
+        ]);
+        $this->usePersistentSlots();
+        $this->assignSlot($user, $medicine);
+
+        $this->getJson(self::ENDPOINT)
+            ->assertOk()
+            ->assertJsonPath('can_apply', true)
+            ->assertJsonPath('writes_performed', false)
+            ->assertJsonPath('unsupported_rules', [])
+            ->assertJsonPath('evaluation.date', '2026-10-22')
+            ->assertJsonPath('evaluation.timezone', 'Asia/Kolkata')
+            ->assertJsonPath('slots.0.schedule_id', $schedule->id)
+            ->assertJsonPath('proposed_datastreams.V1', 8)
+            ->assertJsonPath('proposed_datastreams.V2', 30);
+
+        $this->assertSame([1, 2, 3, 4, 5, 6, 7], $schedule->fresh()->days_of_week);
+        Http::assertNothingSent();
+    }
+
+    public function test_the_evaluation_date_is_the_asia_kolkata_date(): void
+    {
+        Carbon::setTestNow(Carbon::parse('2026-10-22 18:31:00', 'UTC'));
+        $user = $this->authenticate();
+        $today = $this->medicineWithId($user, 10, 'Local today');
+        $future = $this->medicineWithId($user, 20, 'Local future');
+        $todaySchedule = $this->schedule($today, '08:00', ['starts_on' => '2026-10-23']);
+        $futureSchedule = $this->schedule($future, '09:00', ['starts_on' => '2026-10-24']);
+        $this->usePersistentSlots();
+        $this->assignSlot($user, $today);
+        $this->assignSlot($user, $future);
+
+        $this->getJson(self::ENDPOINT)
+            ->assertOk()
+            ->assertJsonPath('can_apply', false)
+            ->assertJsonPath('evaluation.date', '2026-10-23')
+            ->assertJsonPath('evaluation.timezone', 'Asia/Kolkata')
+            ->assertJsonPath('slots.0.schedule_id', $todaySchedule->id)
+            ->assertJsonPath('slots.0.status', 'proposed')
+            ->assertJsonPath('slots.1.schedule_id', $futureSchedule->id)
+            ->assertJsonPath('assumptions.0.accepted', true)
+            ->assertJsonPath('assumptions.0.evaluated_on', '2026-10-23')
+            ->assertJsonPath('assumptions.0.timezone', 'Asia/Kolkata')
+            ->assertJsonPath('unsupported_rules.0.rule', 'starts_on')
+            ->assertJsonPath('unsupported_rules.0.schedule_id', $futureSchedule->id);
 
         Http::assertNothingSent();
     }

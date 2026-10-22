@@ -524,6 +524,80 @@ class ScheduleSlotAssignmentTest extends TestCase
         Http::assertNothingSent();
     }
 
+    public function test_slot_screen_contract_rejects_invalid_input_without_deleting_medicines(): void
+    {
+        $user = $this->authenticate('owner@example.com');
+        $medicine = $this->medicine($user, 10, 'Aspirin');
+        $schedule = $this->schedule($medicine, '08:30');
+        $replacement = $this->medicine($user, 20, 'Vitamin');
+        $replacementSchedule = $this->schedule($replacement, '21:00');
+
+        $this->getJson('/api/device/schedule-slots')
+            ->assertOk()
+            ->assertJsonPath('slot_assignment_persistent', true)
+            ->assertJsonPath('slots.0', [
+                'slot' => 1,
+                'status' => 'unused',
+                'medicine_id' => null,
+                'schedule_id' => null,
+                'assigned_at' => null,
+                'hour_pin' => 'V1',
+                'minute_pin' => 'V2',
+            ])
+            ->assertJsonPath('slots.1.hour_pin', 'V3')
+            ->assertJsonPath('slots.1.minute_pin', 'V4')
+            ->assertJsonPath('slots.2.hour_pin', 'V5')
+            ->assertJsonPath('slots.2.minute_pin', 'V6');
+
+        $this->assertStringNotContainsString('V7', $this->getJson('/api/device/schedule-slots')->getContent());
+
+        $this->postJson('/api/device/schedule-slots', ['medicine_id' => 999])
+            ->assertNotFound()
+            ->assertJsonPath('result', 'not_found');
+        $this->assertSame(0, DeviceScheduleSlot::query()->count());
+
+        $this->postJson('/api/device/schedule-slots', ['medicine_id' => $medicine->id])
+            ->assertCreated()
+            ->assertJsonPath('slot.slot', 1)
+            ->assertJsonPath('slot.hour_pin', 'V1')
+            ->assertJsonPath('slot.minute_pin', 'V2');
+
+        $this->postJson('/api/device/schedule-slots', ['medicine_id' => $medicine->id])
+            ->assertStatus(409)
+            ->assertJsonPath('result', 'already_assigned')
+            ->assertJsonPath('slot.slot', 1);
+
+        foreach ([0, 4, 9] as $slot) {
+            $this->postJson('/api/device/schedule-slots/'.$slot.'/release')
+                ->assertStatus(422)
+                ->assertJsonPath('result', 'invalid_slot');
+            $this->postJson('/api/device/schedule-slots/'.$slot.'/replace', [
+                'medicine_id' => $replacement->id,
+                'schedule_id' => $replacementSchedule->id,
+                'confirmed' => true,
+            ])->assertStatus(422)->assertJsonPath('result', 'invalid_slot');
+        }
+
+        $this->postJson('/api/device/schedule-slots/1/replace', [
+            'medicine_id' => $replacement->id,
+            'schedule_id' => $replacementSchedule->id,
+            'confirmed' => true,
+        ])->assertOk()->assertJsonPath('slot.medicine_id', $replacement->id);
+
+        $this->assertNotNull(Medicine::query()->find($medicine->id));
+        $this->assertNotNull(MedicineSchedule::query()->find($schedule->id));
+        $this->assertSame(1, MedicineSchedule::query()->where('medicine_id', $medicine->id)->count());
+
+        $this->postJson('/api/device/schedule-slots/1/release')->assertOk();
+
+        $this->assertSame(0, DeviceScheduleSlot::query()->count());
+        $this->assertNotNull(Medicine::query()->find($medicine->id));
+        $this->assertNotNull(Medicine::query()->find($replacement->id));
+        $this->assertNotNull(MedicineSchedule::query()->find($schedule->id));
+        $this->assertNotNull(MedicineSchedule::query()->find($replacementSchedule->id));
+        Http::assertNothingSent();
+    }
+
     private function authenticate(string $email): User
     {
         $user = User::create([
