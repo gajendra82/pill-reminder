@@ -34,4 +34,9 @@ public function medicines(): HasMany
 {
     return $this->hasMany(Medicine::class);
 }
+
+public function deviceScheduleSlots(): HasMany
+{
+    return $this->hasMany(DeviceScheduleSlot::class);
+}
 }

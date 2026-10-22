@@ -35,4 +35,14 @@ return [
         ],
     ],
 
+    /*
+    | Device HTTPS API for one dedicated test device.
+    | base_url is the server origin only. auth_token is that device's auth token.
+    | A template ID is not used by the read endpoint and is not accepted here.
+    */
+    'blynk' => [
+        'base_url' => env('BLYNK_BASE_URL'),
+        'auth_token' => env('BLYNK_AUTH_TOKEN'),
+    ],
+
 ];

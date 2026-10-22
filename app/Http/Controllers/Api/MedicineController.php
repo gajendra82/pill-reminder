@@ -3,8 +3,12 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
+use App\Models\DeviceScheduleSlot;
 use App\Models\Medicine;
+use Illuminate\Database\QueryException;
+use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Schema;
 
 class MedicineController extends Controller
 {
@@ -67,10 +71,44 @@ class MedicineController extends Controller
     {
         abort_unless($medicine->user_id === $request->user()->id, 404);
 
-        $medicine->delete();
+        if ($response = $this->slotReleaseRequired($request->user()->id, $medicine->id)) {
+            return $response;
+        }
+
+        try {
+            $medicine->delete();
+        } catch (QueryException $exception) {
+            if ($response = $this->slotReleaseRequired($request->user()->id, $medicine->id)) {
+                return $response;
+            }
+
+            throw $exception;
+        }
 
         return response()->json([
             'message' => 'Medicine deleted successfully.',
         ]);
+    }
+
+    private function slotReleaseRequired(int $userId, int $medicineId): ?JsonResponse
+    {
+        if (! Schema::hasTable('device_schedule_slots')) {
+            return null;
+        }
+
+        $assignment = DeviceScheduleSlot::query()
+            ->where('user_id', $userId)
+            ->where('medicine_id', $medicineId)
+            ->first();
+
+        if ($assignment === null) {
+            return null;
+        }
+
+        return response()->json([
+            'message' => 'Release the reminder slot before deleting this medicine.',
+            'result' => 'slot_release_required',
+            'slot' => (int) $assignment->slot,
+        ], 409);
     }
 }
